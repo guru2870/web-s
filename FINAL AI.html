@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Parking Navigator - Tamil Nadu</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; display: flex; height: 100vh; transition: background 0.3s, color 0.3s; }
+    #map { flex: 3; }
+    #sidebar {
+      flex: 1; background: #f9fafb; padding: 15px; overflow-y: auto;
+      border-left: 2px solid #ddd; transition: background 0.3s, color 0.3s;
+    }
+    h2 { margin: 0 0 10px; }
+    .search-box{display:flex;gap:8px;margin-bottom:8px}
+    .search-box input { flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+    .search-box button, #locateBtn, #darkModeBtn {
+      padding: 6px 12px; margin: 5px 0; background: #2563eb; color: white;
+      border: none; border-radius: 4px; cursor: pointer; display: inline-block;
+    }
+    .parking-card {
+      background: #fff; border: 1px solid #ddd; padding: 10px; margin-bottom: 10px;
+      border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.3s, color 0.3s;
+    }
+    .parking-card h3 { margin: 0 0 5px; font-size: 16px; }
+    .gov { color: green; font-weight: bold; }
+    .private { color: orange; font-weight: bold; }
+    .filters { margin: 10px 0; padding: 8px; border: 1px solid #ddd; border-radius: 6px; background: #f0f0f0; }
+    .filters label { display: block; margin: 3px 0; }
+    body.dark { background: #1e1e1e; color: #f0f0f0; }
+    body.dark #sidebar { background: #2b2b2b; border-left: 2px solid #444; }
+    body.dark .parking-card { background: #333; border: 1px solid #555; color: #f0f0f0; }
+    body.dark .filters { background: #444; border: 1px solid #666; }
+    a.call-link { color: inherit; text-decoration: none; font-weight: 600; }
+    .small { font-size: 12px; color: #666; margin-top: 4px; }
+    .meta-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px }
+    .badge { padding:4px 6px; border-radius:6px; background:#eef; font-size:12px; }
+    mark { background: #ffe066; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="sidebar">
+    <h2>Smart Parking Navigator</h2>
+
+    <div class="search-box">
+      <input type="text" id="locationInput" placeholder="Enter location (e.g. T Nagar)" />
+      <button id="searchBtn">Search</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button id="locateBtn">📍 Use My Location</button>
+      <button id="darkModeBtn">🌙 Dark Mode</button>
+    </div>
+
+    <div class="filters">
+      <h3>Filters</h3>
+      <label><input type="checkbox" id="filterGov"> Government</label>
+      <label><input type="checkbox" id="filterPrivate"> Private</label>
+      <label><input type="checkbox" id="filterMCWG"> (2-wheeler)</label>
+      <label><input type="checkbox" id="filterLMV"> (4-wheeler)</label>
+      <label><input type="checkbox" id="filterVacant"> Only Show Vacant</label>
+    </div>
+
+    <div id="status">Enter a location or use your current location</div>
+    <div id="parkingList"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    let darkMode = false;
+    const lightTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+    const darkTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap &copy; CARTO'
+    });
+
+    const map = L.map('map', { layers: [lightTiles] }).setView([13.0827, 80.2707], 12);
+
+    let parkingMarkers = [];
+    let routeLayer = null;
+    let lastSearchCoords = null;
+    let parkingCache = [];
+
+    const fallbackParking = [
+        // T Nagar
+        { name: "T Nagar Public Parking", lat: 13.0418, lng: 80.2337, type: "Government", price_mcwg: 10, price_lmv: 30, contact: "044-1234567", email: "tparking@gov.in", operator: "Chennai Corp", vehicles: ["MCWG","LMV"], capacity: 120, occupied: 85 },
+        { name: "T Nagar Private Plaza", lat: 13.0425, lng: 80.2360, type: "Private", price_mcwg: 8, price_lmv: 45, contact: "044-22334455", email: "info@plazapark.com", operator: "Plaza Parking Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 110 },
+        { name: "Pondy Bazaar Parking", lat: 13.0410, lng: 80.2350, type: "Private", price_mcwg: 5, price_lmv: 40, contact: "044-33221100", email: "pondybazaar@park.com", operator: "City Parking Ltd", vehicles: ["MCWG","LMV"], capacity: 130, occupied: 95 },
+
+        // Egmore
+        { name: "Egmore Railway Parking", lat: 13.0730, lng: 80.2600, type: "Government", price_mcwg: 8, price_lmv: 20, contact: "044-9876543", email: "egmore@gov.in", operator: "Southern Railway", vehicles: ["MCWG","LMV"], capacity: 120, occupied: 90 },
+        { name: "Egmore Mall Parking", lat: 13.0755, lng: 80.2622, type: "Private", price_mcwg: 6, price_lmv: 55, contact: "044-66778899", email: "mallparking@egmore.com", operator: "Egmore Developers", vehicles: ["LMV"], capacity: 200, occupied: 170 },
+        { name: "Egmore Multi-level Parking", lat: 13.0740, lng: 80.2610, type: "Government", price_mcwg: 7, price_lmv: 25, contact: "044-55667788", email: "egmoremulti@gov.in", operator: "Chennai Corp", vehicles: ["MCWG","LMV"], capacity: 180, occupied: 130 },
+
+        // Royapuram
+        { name: "Royapuram Bus Terminus Parking", lat: 13.1045, lng: 80.2950, type: "Government", price_mcwg: 10, price_lmv: 25, contact: "044-1234567", email: "royapuram@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 120, occupied: 80 },
+        { name: "Royapuram Multi-Level Parking", lat: 13.1050, lng: 80.2965, type: "Government", price_mcwg: 8, price_lmv: 30, contact: "044-2345678", email: "royapark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 150 },
+        { name: "Royapuram Private Parking", lat: 13.1035, lng: 80.2940, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-3456789", email: "royapriv@park.com", operator: "Royapuram Pvt Ltd", vehicles: ["LMV"], capacity: 100, occupied: 75 },
+
+        // Kodambakkam
+        { name: "Kodambakkam Multi-Level Parking", lat: 13.0530, lng: 80.2175, type: "Government", price_mcwg: 8, price_lmv: 35, contact: "044-4567890", email: "kodampark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 300, occupied: 220 },
+        { name: "Kodambakkam Pay & Park", lat: 13.0545, lng: 80.2180, type: "Private", price_mcwg: 6, price_lmv: 45, contact: "044-5678901", email: "kodampark@priv.com", operator: "Kodambakkam Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 110 },
+        { name: "Kodambakkam Metro Station Parking", lat: 13.0520, lng: 80.2160, type: "Government", price_mcwg: 7, price_lmv: 25, contact: "044-6789012", email: "kodammetro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Thiruvottiyur
+        { name: "Thiruvottiyur Multi-Level Parking", lat: 13.1780, lng: 80.3135, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-7890123", email: "thiruvottpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 250, occupied: 180 },
+        { name: "Thiruvottiyur Pay & Park", lat: 13.1795, lng: 80.3150, type: "Private", price_mcwg: 6, price_lmv: 40, contact: "044-8901234", email: "thiruvotpark@priv.com", operator: "Thiruvottiyur Pvt Ltd", vehicles: ["LMV"], capacity: 120, occupied: 95 },
+        { name: "Thiruvottiyur Bus Stand Parking", lat: 13.1770, lng: 80.3120, type: "Government", price_mcwg: 8, price_lmv: 20, contact: "044-9012345", email: "thiruvotbus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 100, occupied: 70 },
+
+        // Anna Nagar
+        { name: "Anna Nagar Multi-Level Parking", lat: 13.0875, lng: 80.2165, type: "Government", price_mcwg: 10, price_lmv: 35, contact: "044-0123456", email: "annanagpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 350, occupied: 280 },
+        { name: "Anna Nagar Pay & Park", lat: 13.0885, lng: 80.2170, type: "Private", price_mcwg: 8, price_lmv: 50, contact: "044-1234567", email: "annanagpark@priv.com", operator: "Anna Nagar Pvt Ltd", vehicles: ["LMV"], capacity: 200, occupied: 150 },
+        { name: "Anna Nagar Tower Parking", lat: 13.0860, lng: 80.2150, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-2345678", email: "annanagtower@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 150, occupied: 120 },
+
+        // Teynampet
+        { name: "Teynampet Multi-Level Parking", lat: 13.0325, lng: 80.2335, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-3456789", email: "teynampetpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 300, occupied: 240 },
+        { name: "Teynampet Pay & Park", lat: 13.0335, lng: 80.2340, type: "Private", price_mcwg: 7, price_lmv: 45, contact: "044-4567890", email: "teynampetpark@priv.com", operator: "Teynampet Pvt Ltd", vehicles: ["LMV"], capacity: 180, occupied: 140 },
+        { name: "Teynampet Metro Station Parking", lat: 13.0310, lng: 80.2320, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-5678901", email: "teynametro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+        // Saidapet
+        { name: "Saidapet Multi-Level Parking", lat: 13.0275, lng: 80.2235, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-6789012", email: "saidapetpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 250, occupied: 190 },
+        { name: "Saidapet Pay & Park", lat: 13.0285, lng: 80.2240, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-7890123", email: "saidapetpark@priv.com", operator: "Saidapet Pvt Ltd", vehicles: ["LMV"], capacity: 130, occupied: 100 },
+        { name: "Saidapet Bus Stand Parking", lat: 13.0260, lng: 80.2220, type: "Government", price_mcwg: 8, price_lmv: 22, contact: "044-8901234", email: "saidapetbus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 90, occupied: 65 },
+
+        // Mylapore
+        { name: "Mylapore Multi-Level Parking", lat: 13.0270, lng: 80.2715, type: "Government", price_mcwg: 10, price_lmv: 35, contact: "044-9012345", email: "mylaporepark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 280, occupied: 220 },
+        { name: "Mylapore Pay & Park", lat: 13.0285, lng: 80.2720, type: "Private", price_mcwg: 8, price_lmv: 50, contact: "044-0123456", email: "mylaporepark@priv.com", operator: "Mylapore Pvt Ltd", vehicles: ["LMV"], capacity: 160, occupied: 120 },
+        { name: "Mylapore Metro Station Parking", lat: 13.0260, lng: 80.2700, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1234567", email: "mylametro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 150 },
+
+        // Perungudi
+        { name: "Perungudi Multi-Level Parking", lat: 12.9945, lng: 80.2315, type: "Government", price_mcwg: 9, price_lmv: 32, contact: "044-2345678", email: "perungudipark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 300, occupied: 240 },
+        { name: "Perungudi Pay & Park", lat: 12.9955, lng: 80.2320, type: "Private", price_mcwg: 7, price_lmv: 45, contact: "044-3456789", email: "perungudipark@priv.com", operator: "Perungudi Pvt Ltd", vehicles: ["LMV"], capacity: 180, occupied: 140 },
+        { name: "Perungudi IT Park Parking", lat: 12.9930, lng: 80.2300, type: "Private", price_mcwg: 8, price_lmv: 50, contact: "044-4567890", email: "perunguditpark@priv.com", operator: "Perungudi IT Park Pvt Ltd", vehicles: ["LMV"], capacity: 250, occupied: 200 },
+
+        // Guindy
+        { name: "Guindy Multi-Level Parking", lat: 13.0185, lng: 80.2095, type: "Government", price_mcwg: 10, price_lmv: 35, contact: "044-5678901", email: "guindypark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 350, occupied: 280 },
+        { name: "Guindy Pay & Park", lat: 13.0195, lng: 80.2100, type: "Private", price_mcwg: 8, price_lmv: 50, contact: "044-6789012", email: "guindypark@priv.com", operator: "Guindy Pvt Ltd", vehicles: ["LMV"], capacity: 200, occupied: 160 },
+        { name: "Guindy Metro Station Parking", lat: 13.0170, lng: 80.2080, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-7890123", email: "guindymetro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+
+        // Thiruvanmiyur
+        { name: "Thiruvanmiyur Multi-Level Parking", lat: 12.9715, lng: 80.2515, type: "Government", price_mcwg: 9, price_lmv: 32, contact: "044-8901234", email: "thiruvanmiyurpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 280, occupied: 220 },
+        { name: "Thiruvanmiyur Pay & Park", lat: 12.9725, lng: 80.2520, type: "Private", price_mcwg: 7, price_lmv: 45, contact: "044-9012345", email: "thiruvanmiyurpark@priv.com", operator: "Thiruvanmiyur Pvt Ltd", vehicles: ["LMV"], capacity: 160, occupied: 120 },
+        { name: "Thiruvanmiyur Bus Stand Parking", lat: 12.9700, lng: 80.2500, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-0123456", email: "thiruvambus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 120, occupied: 90 },
+        // Adyar
+        { name: "Adyar Multi-Level Parking", lat: 13.0120, lng: 80.2650, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1300011", email: "adyarpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 250, occupied: 200 },
+        { name: "Adyar Pay & Park", lat: 13.0135, lng: 80.2665, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1300022", email: "adyarpriv@park.com", operator: "Adyar Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Adyar Bus Stand Parking", lat: 13.0110, lng: 80.2640, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300033", email: "adyarbus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Besant Nagar
+        { name: "Besant Nagar Multi-Level Parking", lat: 13.0270, lng: 80.2620, type: "Government", price_mcwg: 10, price_lmv: 35, contact: "044-1300044", email: "besantpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 280, occupied: 220 },
+        { name: "Besant Nagar Pay & Park", lat: 13.0285, lng: 80.2635, type: "Private", price_mcwg: 8, price_lmv: 50, contact: "044-1300055", email: "besantpriv@park.com", operator: "Besant Pvt Ltd", vehicles: ["LMV"], capacity: 160, occupied: 120 },
+        { name: "Besant Nagar Metro Station Parking", lat: 13.0260, lng: 80.2610, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1300066", email: "besantmetro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 150 },
+
+        // Royapettah
+        { name: "Royapettah Multi-Level Parking", lat: 13.0560, lng: 80.2625, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1300077", email: "royapetpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+        { name: "Royapettah Pay & Park", lat: 13.0575, lng: 80.2640, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1300088", email: "royapetpriv@park.com", operator: "Royapettah Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Royapettah Bus Stand Parking", lat: 13.0550, lng: 80.2610, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300099", email: "royapetbus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Koyambedu
+        { name: "Koyambedu Multi-Level Parking", lat: 13.0820, lng: 80.2230, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1300100", email: "koyambedupark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 250, occupied: 200 },
+        { name: "Koyambedu Pay & Park", lat: 13.0835, lng: 80.2245, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1300111", email: "koyambedupriv@park.com", operator: "Koyambedu Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Koyambedu Bus Stand Parking", lat: 13.0810, lng: 80.2220, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300122", email: "koyambedubus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Perambur
+        { name: "Perambur Multi-Level Parking", lat: 13.1100, lng: 80.2315, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1300133", email: "peramburpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+        { name: "Perambur Pay & Park", lat: 13.1115, lng: 80.2330, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1300144", email: "peramburpriv@park.com", operator: "Perambur Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Perambur Railway Station Parking", lat: 13.1090, lng: 80.2300, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300155", email: "peramburrail@gov.in", operator: "Southern Railway", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Villivakkam
+        { name: "Villivakkam Multi-Level Parking", lat: 13.1000, lng: 80.2170, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1300166", email: "villivakkampark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 250, occupied: 200 },
+        { name: "Villivakkam Pay & Park", lat: 13.1015, lng: 80.2185, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1300177", email: "villivakkampriv@park.com", operator: "Villivakkam Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Villivakkam Bus Stand Parking", lat: 13.0990, lng: 80.2160, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300188", email: "villivakkambus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Saidapet New Area (excluding previous Saidapet)
+        { name: "Saidapet South Multi-Level Parking", lat: 13.0250, lng: 80.2210, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1300199", email: "saidapetsouth@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+        { name: "Saidapet South Pay & Park", lat: 13.0265, lng: 80.2225, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1300200", email: "saidapetsouthpriv@park.com", operator: "Saidapet Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Saidapet South Bus Stand Parking", lat: 13.0240, lng: 80.2200, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300211", email: "saidapetsouthbus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Egmore New Area (excluding previous Egmore)
+        { name: "Egmore East Multi-Level Parking", lat: 13.0765, lng: 80.2635, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1300222", email: "egmoreeast@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 250, occupied: 200 },
+        { name: "Egmore East Pay & Park", lat: 13.0780, lng: 80.2650, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1300233", email: "egmoreeastpriv@park.com", operator: "Egmore Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Egmore East Railway Station Parking", lat: 13.0750, lng: 80.2620, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300244", email: "egmoreeastrail@gov.in", operator: "Southern Railway", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Kotturpuram
+        { name: "Kotturpuram Multi-Level Parking", lat: 13.0050, lng: 80.2635, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1300255", email: "kotturpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+        { name: "Kotturpuram Pay & Park", lat: 13.0065, lng: 80.2650, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1300266", email: "kotturpriv@park.com", operator: "Kottur Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Kotturpuram Bus Stand Parking", lat: 13.0040, lng: 80.2620, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1300277", email: "kotturbus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+        // Washermanpet
+        { name: "Washermanpet Multi-Level Parking", lat: 13.1180, lng: 80.2930, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1400011", email: "washermanpetpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+        { name: "Washermanpet Pay & Park", lat: 13.1195, lng: 80.2945, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1400022", email: "washermanpetpriv@park.com", operator: "Washermanpet Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Washermanpet Railway Station Parking", lat: 13.1170, lng: 80.2920, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1400033", email: "washermanpetrail@gov.in", operator: "Southern Railway", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Triplicane
+        { name: "Triplicane Multi-Level Parking", lat: 13.0620, lng: 80.2800, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1400044", email: "triplicanepark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 240, occupied: 190 },
+        { name: "Triplicane Pay & Park", lat: 13.0635, lng: 80.2815, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1400055", email: "triplicanepriv@park.com", operator: "Triplicane Pvt Ltd", vehicles: ["LMV"], capacity: 160, occupied: 120 },
+        { name: "Triplicane Bus Stand Parking", lat: 13.0610, lng: 80.2790, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1400066", email: "triplicanebus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 180, occupied: 140 },
+
+        // Mandaveli
+        { name: "Mandaveli Multi-Level Parking", lat: 13.0230, lng: 80.2650, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1400077", email: "mandavelipark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 210, occupied: 170 },
+        { name: "Mandaveli Pay & Park", lat: 13.0245, lng: 80.2665, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1400088", email: "mandavelipriv@park.com", operator: "Mandaveli Pvt Ltd", vehicles: ["LMV"], capacity: 140, occupied: 110 },
+        { name: "Mandaveli Bus Stand Parking", lat: 13.0220, lng: 80.2640, type: "Government", price_mcwg: 8, price_lmv: 24, contact: "044-1400099", email: "mandavelibus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 180, occupied: 150 },
+
+        // Shenoy Nagar
+        { name: "Shenoy Nagar Multi-Level Parking", lat: 13.0800, lng: 80.2300, type: "Government", price_mcwg: 9, price_lmv: 29, contact: "044-1400100", email: "shenoypark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 230, occupied: 180 },
+        { name: "Shenoy Nagar Pay & Park", lat: 13.0815, lng: 80.2315, type: "Private", price_mcwg: 7, price_lmv: 41, contact: "044-1400111", email: "shenoypriv@park.com", operator: "Shenoy Nagar Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Shenoy Nagar Metro Station Parking", lat: 13.0790, lng: 80.2290, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1400122", email: "shenoymetro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Choolaimedu
+        { name: "Choolaimedu Multi-Level Parking", lat: 13.0650, lng: 80.2210, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1400133", email: "choolaimedupark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 210, occupied: 170 },
+        { name: "Choolaimedu Pay & Park", lat: 13.0665, lng: 80.2225, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1400144", email: "choolaimedupriv@park.com", operator: "Choolaimedu Pvt Ltd", vehicles: ["LMV"], capacity: 140, occupied: 110 },
+        { name: "Choolaimedu Bus Stand Parking", lat: 13.0640, lng: 80.2200, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1400155", email: "choolaimedubus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 180, occupied: 150 },
+
+        // Purasaiwalkam
+        { name: "Purasaiwalkam Multi-Level Parking", lat: 13.0890, lng: 80.2560, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1400166", email: "purasaiwalkampark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 190 },
+        { name: "Purasaiwalkam Pay & Park", lat: 13.0905, lng: 80.2575, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1400177", email: "purasaiwalkampriv@park.com", operator: "Purasaiwalkam Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Purasaiwalkam Railway Station Parking", lat: 13.0880, lng: 80.2550, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1400188", email: "purasaiwalkamrail@gov.in", operator: "Southern Railway", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Kilpauk
+        { name: "Kilpauk Multi-Level Parking", lat: 13.0780, lng: 80.2450, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1400199", email: "kilpaukpark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 210, occupied: 170 },
+        { name: "Kilpauk Pay & Park", lat: 13.0795, lng: 80.2465, type: "Private", price_mcwg: 7, price_lmv: 42, contact: "044-1400200", email: "kilpaukpriv@park.com", operator: "Kilpauk Pvt Ltd", vehicles: ["LMV"], capacity: 140, occupied: 100 },
+        { name: "Kilpauk Metro Station Parking", lat: 13.0770, lng: 80.2440, type: "Government", price_mcwg: 8, price_lmv: 26, contact: "044-1400211", email: "kilpaukmetro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 180, occupied: 150 },
+
+        // Arumbakkam
+        { name: "Arumbakkam Multi-Level Parking", lat: 13.0740, lng: 80.2100, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1400222", email: "arumbakkampark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 180 },
+        { name: "Arumbakkam Pay & Park", lat: 13.0755, lng: 80.2115, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1400233", email: "arumbakkampriv@park.com", operator: "Arumbakkam Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Arumbakkam Bus Stand Parking", lat: 13.0730, lng: 80.2090, type: "Government", price_mcwg: 8, price_lmv: 25, contact: "044-1400244", email: "arumbakkambus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Thirumangalam
+        { name: "Thirumangalam Multi-Level Parking", lat: 13.0910, lng: 80.2085, type: "Government", price_mcwg: 9, price_lmv: 28, contact: "044-1400255", email: "thirumangalampark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 230, occupied: 190 },
+        { name: "Thirumangalam Pay & Park", lat: 13.0925, lng: 80.2100, type: "Private", price_mcwg: 7, price_lmv: 40, contact: "044-1400266", email: "thirumangalampriv@park.com", operator: "Thirumangalam Pvt Ltd", vehicles: ["LMV"], capacity: 150, occupied: 120 },
+        { name: "Thirumangalam Metro Station Parking", lat: 13.0900, lng: 80.2070, type: "Government", price_mcwg: 8, price_lmv: 26, contact: "044-1400277", email: "thirumangalammetro@gov.in", operator: "Chennai Metro", vehicles: ["MCWG","LMV"], capacity: 200, occupied: 160 },
+
+        // Thoraipakkam
+        { name: "Thoraipakkam Multi-Level Parking", lat: 12.9350, lng: 80.2300, type: "Government", price_mcwg: 9, price_lmv: 30, contact: "044-1400288", email: "thoraipakkampark@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 220, occupied: 190 },
+        { name: "Thoraipakkam Pay & Park", lat: 12.9365, lng: 80.2315, type: "Private", price_mcwg: 7, price_lmv: 45, contact: "044-1400299", email: "thoraipakkampriv@park.com", operator: "Thoraipakkam Pvt Ltd", vehicles: ["LMV"], capacity: 160, occupied: 120 },
+        { name: "Thoraipakkam Bus Stand Parking", lat: 12.9340, lng: 80.2290, type: "Government", price_mcwg: 8, price_lmv: 26, contact: "044-1400300", email: "thoraipakkambus@gov.in", operator: "GCC", vehicles: ["MCWG","LMV"], capacity: 180, occupied: 140 },
+
+
+    ];
+
+        
+
+    async function fetchWithTimeout(url, options = {}, timeout = 8000) {
+      return Promise.race([
+        fetch(url, options),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), timeout))
+      ]);
+    }
+
+    async function loadParkingData() {
+      try {
+        const res = await fetchWithTimeout("/api/parkings");
+        if (!res.ok) throw new Error("API failed");
+        return await res.json();
+      } catch (err) {
+        console.warn("Using fallback parking data:", err);
+        return fallbackParking;
+      }
+    }
+
+    function occupancyColor(ratio) {
+      if (ratio < 0.7) return "green";
+      if (ratio < 0.9) return "orange";
+      return "red";
+    }
+
+    function applyFilters(parkings) {
+      const gov = document.getElementById("filterGov").checked;
+      const pri = document.getElementById("filterPrivate").checked;
+      const fMCWG = document.getElementById("filterMCWG").checked;
+      const fLMV = document.getElementById("filterLMV").checked;
+      const vacant = document.getElementById("filterVacant").checked;
+
+      return parkings.filter(p => {
+        if (gov && !pri && p.type !== "Government") return false;
+        if (pri && !gov && p.type !== "Private") return false;
+        if (fMCWG || fLMV) {
+          const supportsMCWG = p.vehicles.includes("MCWG");
+          const supportsLMV = p.vehicles.includes("LMV");
+          if (fMCWG && !supportsMCWG && !fLMV) return false;
+          if (fLMV && !supportsLMV && !fMCWG) return false;
+          if (fMCWG && fLMV && !supportsMCWG && !supportsLMV) return false;
+        }
+        if (vacant && (p.capacity - p.occupied) <= 0) return false;
+        return true;
+      });
+    }
+
+    function filterByKeyword(parkings, keyword) {
+      if (!keyword) return parkings;
+      const lower = keyword.toLowerCase();
+      return parkings.filter(p => 
+        (p.name && p.name.toLowerCase().includes(lower)) ||
+        (p.operator && p.operator.toLowerCase().includes(lower)) ||
+        (p.type && p.type.toLowerCase().includes(lower))
+      );
+    }
+
+    function highlightText(text, keyword) {
+      if (!keyword) return text;
+      const regex = new RegExp(`(${keyword})`, 'gi');
+      return text.replace(regex, '<mark>$1</mark>');
+    }
+
+    async function showNearbyParking(lat, lon) {
+      clearMarkers();
+      const parkings = await loadParkingData();
+      const normalized = parkings.map(p=>({...p, lat: Number(p.lat), lng: Number(p.lng), capacity: Number(p.capacity)||0, occupied: Number(p.occupied)||0}));
+      parkingCache = normalized.filter(p => getDistanceKm(lat, lon, p.lat, p.lng) <= 4); // 4 km filter
+      renderParking(lat, lon);
+    }
+
+    function renderParking(lat, lon) {
+      clearMarkers();
+      const searchKeyword = document.getElementById("locationInput").value.trim();
+      let filtered = filterByKeyword(parkingCache, searchKeyword);
+      filtered = applyFilters(filtered);
+
+      const listDiv = document.getElementById("parkingList");
+      listDiv.innerHTML = "";
+
+      if (!filtered.length) {
+        listDiv.innerHTML = "<div class='small'>No parking matches filters within 4 km.</div>";
+        return;
+      }
+
+      filtered.forEach(p => {
+        const vacancies = Math.max(0, p.capacity - p.occupied);
+        const ratio = p.capacity ? (p.occupied / p.capacity) : 0;
+        const color = occupancyColor(ratio);
+
+        const marker = L.circleMarker([p.lat, p.lng], { color, radius: 10, weight: 3, fillOpacity: 0.75 }).addTo(map);
+
+        const priceMC = (p.price_mcwg != null && p.price_mcwg !== "") ? `₹${p.price_mcwg}/hr` : "N/A";
+        const priceLM = (p.price_lmv != null && p.price_lmv !== "") ? `₹${p.price_lmv}/hr` : "N/A";
+
+        const popupHtml = `
+          <div style="min-width:220px;font-family:Arial, sans-serif;">
+            <div style="font-weight:800;color:#000">${highlightText(p.name, searchKeyword)}</div>
+            <div class="small">Type: <strong>${p.type}</strong></div>
+            <div class="small">Operator: ${p.operator || 'N/A'}</div>
+            <div style="margin-top:6px"><strong>Prices</strong><br>MCWG: ${priceMC} · LMV: ${priceLM}</div>
+            <div style="margin-top:6px">Vacancies: <strong>${vacancies}</strong> / ${p.capacity}</div>
+            <div style="margin-top:6px">Contact: <a class="call-link" href="tel:${p.contact}">${p.contact}</a></div>
+            <div style="margin-top:6px">Email: <a href="mailto:${p.email}">${p.email}</a></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+              <button class="navBtn" data-lat="${p.lat}" data-lng="${p.lng}" style="background:#06b6d4;color:#022;border:none;padding:6px 8px;border-radius:8px;cursor:pointer">Directions</button>
+            </div>
+          </div>
+        `;
+        marker.bindPopup(popupHtml);
+        parkingMarkers.push(marker);
+
+        const card = document.createElement("div");
+        card.className = "parking-card";
+        card.innerHTML = `
+          <h3>${highlightText(p.name, searchKeyword)}</h3>
+          <div class="small">Type: <strong>${p.type}</strong></div>
+          <div class="meta-row">
+            <div class="badge">MCWG: ${priceMC}</div>
+            <div class="badge">LMV: ${priceLM}</div>
+            <div class="badge">${p.vehicles ? p.vehicles.join(', ') : '-'}</div>
+          </div>
+          <div class="small" style="margin-top:6px">Vacancies: <strong>${vacancies}</strong> / ${p.capacity}</div>
+          <div class="small">Operator: ${p.operator || 'N/A'}</div>
+          <div class="small">Contact: <a class="call-link" href="tel:${p.contact}">${p.contact}</a></div>
+          <div class="small">Email: <a href="mailto:${p.email}">${p.email}</a></div>
+          <div class="small" style="margin-top:6px">Distance: ${getDistanceKm(lat, lon, p.lat, p.lng).toFixed(2)} km</div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btnRoute" data-lat="${p.lat}" data-lng="${p.lng}" style="background:linear-gradient(90deg,#06b6d4,#0ea5a4);padding:6px;border-radius:8px;border:none;cursor:pointer">Route</button>
+            <button class="btnCenter" data-lat="${p.lat}" data-lng="${p.lng}" style="background:#eee;border:1px solid #ccc;padding:6px;border-radius:8px;cursor:pointer">Center</button>
+          </div>
+        `;
+        listDiv.appendChild(card);
+
+        card.querySelector('.btnCenter').addEventListener('click', ()=> map.setView([p.lat,p.lng],16));
+        card.querySelector('.btnRoute').addEventListener('click', async ()=>{
+          if(!lastSearchCoords) { alert('Please search a location or use your location first.'); return; }
+          await drawRouteOSRM([lastSearchCoords[1], lastSearchCoords[0]],[p.lng, p.lat]);
+        });
+      });
+    }
+
+    function clearMarkers() {
+      parkingMarkers.forEach(m => map.removeLayer(m));
+      parkingMarkers = [];
+      if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+    }
+
+    async function drawRouteOSRM(fromLngLat, toLngLat){
+      try {
+        if(routeLayer){ map.removeLayer(routeLayer); routeLayer = null; }
+        const url = `https://router.project-osrm.org/route/v1/driving/${fromLngLat[0]},${fromLngLat[1]};${toLngLat[0]},${toLngLat[1]}?overview=full&geometries=geojson`;
+        const r = await fetchWithTimeout(url);
+        const j = await r.json();
+        if(!j.routes || !j.routes.length) { alert('No route found'); return; }
+        const coords = j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+        routeLayer = L.polyline(coords, { color:'#06b6d4', weight:5, opacity:0.95 }).addTo(map);
+        map.fitBounds(routeLayer.getBounds(), { padding:[60,60] });
+        const mins = Math.round(j.routes[0].duration/60);
+        alert(`ETA ~ ${mins} min`);
+      } catch(e){
+        console.error(e);
+        alert('Routing failed: ' + e.message);
+      }
+    }
+
+    function getDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const toRad = Math.PI/180;
+      const dLat = (lat2 - lat1) * toRad;
+      const dLon = (lon2 - lon1) * toRad;
+      const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(lat1*toRad)*Math.cos(lat2*toRad)*Math.sin(dLon/2)*Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
+    document.getElementById("searchBtn").addEventListener("click", async () => {
+      const query = document.getElementById("locationInput").value.trim();
+      if (!query) return;
+      document.getElementById("status").textContent = "Searching...";
+      try {
+        const res = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`, {}, 10000);
+        const data = await res.json();
+        if (!data.length) { document.getElementById("status").textContent = "No results"; return; }
+        const loc = data[0];
+        const lat = parseFloat(loc.lat), lon = parseFloat(loc.lon);
+        map.setView([lat, lon], 14);
+        lastSearchCoords = [lat, lon];
+        showNearbyParking(lat, lon);
+        document.getElementById("status").textContent = "Showing parking near: " + loc.display_name;
+      } catch (err) {
+        document.getElementById("status").textContent = "Search failed: " + err.message;
+      }
+    });
+
+    document.getElementById("locateBtn").addEventListener("click", () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(pos => {
+          const { latitude, longitude } = pos.coords;
+          map.setView([latitude, longitude], 14);
+          lastSearchCoords = [latitude, longitude];
+          showNearbyParking(latitude, longitude);
+          document.getElementById("status").textContent = "Showing parking near your location";
+        }, err => {
+          document.getElementById("status").textContent = "Geolocation failed: " + err.message;
+        });
+      }
+    });
+
+    document.getElementById("darkModeBtn").addEventListener("click", () => {
+      darkMode = !darkMode;
+      document.body.classList.toggle("dark", darkMode);
+      if(darkMode){ map.removeLayer(lightTiles); darkTiles.addTo(map); } 
+      else{ map.removeLayer(darkTiles); lightTiles.addTo(map); }
+    });
+
+    document.querySelectorAll('.filters input').forEach(inp => {
+      inp.addEventListener('change', () => {
+        if(lastSearchCoords) renderParking(...lastSearchCoords);
+      });
+    });
+
+    // initial load
+    loadParkingData().then(data => { parkingCache = data; });
+  </script>
+</body>
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Urban Parking System - Team Knox</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🅿️</text></svg>">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="flex items-center justify-between">
+                <div class="header-brand">
+                    <h1>🅿️ Smart Parking System</h1>
+                    <p class="header-subtitle">Real-time parking availability</p>
+                </div>
+                <div class="header-actions">
+                    <button id="toggleNotifications" class="btn btn--outline">
+                        <span id="notificationIcon">🔔</span>
+                        Notifications
+                    </button>
+                    <button id="toggleDashboard" class="btn btn--primary">
+                        📊 Analytics
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+            <div class="app-layout">
+                <!-- Search and Filters -->
+                <div class="search-section">
+                    <div class="search-container">
+                        <input 
+                            type="text" 
+                            id="searchInput" 
+                            class="form-control search-input" 
+                            placeholder="Search for parking near..."
+                        >
+                        <button id="searchBtn" class="btn btn--primary search-btn">
+                            🔍 Search
+                        </button>
+                        <button id="locateBtn" class="btn btn--secondary">
+                            📍 My Location
+                        </button>
+                    </div>
+                    
+                    <div class="filters">
+                        <select id="typeFilter" class="form-control filter-select">
+                            <option value="">All Types</option>
+                            <option value="parking_garage">Parking Garage</option>
+                            <option value="surface_lot">Surface Lot</option>
+                            <option value="street_parking">Street Parking</option>
+                        </select>
+                        
+                        <select id="availabilityFilter" class="form-control filter-select">
+                            <option value="">All Availability</option>
+                            <option value="high">High (70%+ available)</option>
+                            <option value="medium">Medium (30-69% available)</option>
+                            <option value="low">Low (0-29% available)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Map and Sidebar Layout -->
+                <div class="map-layout">
+                    <!-- Sidebar -->
+                    <div class="sidebar">
+                        <div class="sidebar-header">
+                            <h3>Parking Zones</h3>
+                            <div class="legend">
+                                <div class="legend-item">
+                                    <span class="legend-dot high"></span>
+                                    <span>High Availability</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-dot medium"></span>
+                                    <span>Medium Availability</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-dot low"></span>
+                                    <span>Low Availability</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="sidebar-content">
+                            <div id="parkingList" class="parking-list">
+                                <!-- Parking zones will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <div class="sidebar-stats">
+                            <div class="stat-item">
+                                <span class="stat-label">Total Available</span>
+                                <span id="totalAvailable" class="stat-value">0</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Average Occupancy</span>
+                                <span id="avgOccupancy" class="stat-value">0%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Map Container -->
+                    <div class="map-container">
+                        <div id="map"></div>
+                        <div class="map-controls">
+                            <button id="refreshBtn" class="btn btn--secondary map-control-btn">
+                                🔄 Refresh
+                            </button>
+                            <div class="last-updated">
+                                Last updated: <span id="lastUpdated">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div class="filters">
+    <select id="typeFilter" class="form-control filter-select">
+        <option value="">All Types</option>
+        <option value="parking_garage">Parking Garage</option>
+        <option value="surface_lot">Surface Lot</option>
+        <option value="street_parking">Street Parking</option>
+    </select>
+    
+    <select id="availabilityFilter" class="form-control filter-select">
+        <option value="">All Availability</option>
+        <option value="high">High (70%+ available)</option>
+        <option value="medium">Medium (30-69% available)</option>
+        <option value="low">Low (0-29% available)</option>
+    </select>
+
+    <!-- ✅ Added Filters Section -->
+    <div class="extra-filters">
+        <h3>Filters</h3>
+        <label><input type="checkbox" id="filterGov"> Government</label>
+        <label><input type="checkbox" id="filterPrivate"> Private</label>
+        <label><input type="checkbox" id="filterMCWG"> (2-wheeler)</label>
+        <label><input type="checkbox" id="filterLMV"> (4-wheeler)</label>
+        <label><input type="checkbox" id="filterVacant"> Only Show Vacant</label>
+    </div>
+</div>
+
+    <!-- Dashboard Modal -->
+    <div id="dashboardModal" class="modal hidden">
+        <div class="modal-backdrop" id="modalBackdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Analytics Dashboard</h2>
+                <button id="closeDashboard" class="btn btn--outline modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="dashboard-grid">
+                    <div class="dashboard-card">
+                        <h3>System Overview</h3>
+                        <div class="overview-stats">
+                            <div class="overview-stat">
+                                <span class="overview-number" id="totalSpots">0</span>
+                                <span class="overview-label">Total Spots</span>
+                            </div>
+                            <div class="overview-stat">
+                                <span class="overview-number" id="availableSpots">0</span>
+                                <span class="overview-label">Available Now</span>
+                            </div>
+                            <div class="overview-stat">
+                                <span class="overview-number" id="searchReduction">0%</span>
+                                <span class="overview-label">Search Time Reduction</span>
+                            </div>
+                            <div class="overview-stat">
+                                <span class="overview-number" id="avgWalkTime">0</span>
+                                <span class="overview-label">Avg Walk Time</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <h3>Occupancy Trends</h3>
+                        <div class="chart-container" style="position: relative; height: 300px;">
+                            <canvas id="occupancyChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <h3>Zone Performance</h3>
+                        <div class="chart-container" style="position: relative; height: 300px;">
+                            <canvas id="zoneChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <h3>Peak Hours</h3>
+                        <div class="peak-hours">
+                            <div class="peak-hour-item">
+                                <span class="peak-time">8-10 AM</span>
+                                <span class="peak-desc">Morning Rush</span>
+                            </div>
+                            <div class="peak-hour-item">
+                                <span class="peak-time">5-7 PM</span>
+                                <span class="peak-desc">Evening Rush</span>
+                            </div>
+                        </div>
+                        <div class="benefits-list">
+                            <h4>SDG Benefits Achieved:</h4>
+                            <ul>
+                                <li>🏙️ Sustainable Cities & Communities</li>
+                                <li>🌍 Climate Action (Reduced Emissions)</li>
+                                <li>💚 Good Health & Well-being</li>
+                                <li>🔄 Efficient Resource Usage</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Parking Details Modal -->
+    <div id="parkingModal" class="modal hidden">
+        <div class="modal-backdrop" id="parkingModalBackdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="parkingModalTitle">Parking Zone Details</h2>
+                <button id="closeParkingModal" class="btn btn--outline modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="parkingModalContent">
+                    <!-- Content populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="notificationToast" class="notification-toast hidden">
+        <div class="toast-content">
+            <span class="toast-icon">🅿️</span>
+            <span id="toastMessage">Notification message</span>
+        </div>
+        <button id="closeToast" class="toast-close">✕</button>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
+
+
+
+
+ 
